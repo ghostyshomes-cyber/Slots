@@ -290,6 +290,24 @@ const MAX_BET = parseFloat(params.get('max_bet') || '500');
 const USER_ID = params.get('uid') || '';
 let balance   = parseFloat(params.get('balance') || '100');
 let initialBalance = balance;  // Запомнить стартовый баланс
+
+// DEBUG: детальное логирование параметров
+console.warn('═══════════════════════════════════════');
+console.warn('[GameInit] GAME INITIALIZATION');
+console.warn('═══════════════════════════════════════');
+console.warn('[GameInit] BOT_URL:', BOT_URL || '❌ EMPTY!');
+console.warn('[GameInit] USER_ID:', USER_ID || '❌ EMPTY!');
+console.warn('[GameInit] Initial balance:', balance);
+console.warn('[GameInit] MIN_BET:', MIN_BET, 'MAX_BET:', MAX_BET);
+
+// Если BOT_URL пуст, это критическая проблема
+if(!BOT_URL){
+  console.error('═══════════════════════════════════════');
+  console.error('❌ CRITICAL: BOT_URL is empty!');
+  console.error('The casino will NOT be able to sync balance with the bot.');
+  console.error('Check that games_webapp_url is set in admin panel.');
+  console.error('═══════════════════════════════════════');
+}
 let currentGame = 'slots';
 let doubleReached = false;  // Флаг: достигнут ли х2 баланса
 
@@ -1059,34 +1077,51 @@ function updateRocket(){
 
 /* ── BOT BALANCE SYNC ── */
 const GAME_SECRET = params.get('secret') || '';
+console.warn('[GameInit] GAME_SECRET:', GAME_SECRET ? 'SET' : 'EMPTY');
 
 function _gamePost(payload){
-  if(!BOT_URL || !USER_ID) return;
+  if(!BOT_URL){
+    console.error('[GameHTTP] ERROR: BOT_URL is empty!');
+    return;
+  }
+  if(!USER_ID){
+    console.error('[GameHTTP] ERROR: USER_ID is empty!');
+    return;
+  }
+  
   payload.uid = USER_ID;
   payload.new_balance = balance;
   // Если casino_balance не установлен, используем текущий баланс
   if(typeof payload.casino_balance === 'undefined'){
     payload.casino_balance = balance + (payload.bet || 0);
   }
+  
+  console.warn('[GameHTTP] Sending payload:', JSON.stringify(payload));
+  
   fetch(BOT_URL, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'X-Game-Secret': GAME_SECRET },
     body: JSON.stringify(payload)
   })
   .then(r => {
+    console.warn('[GameHTTP] Response status:', r.status);
     if(!r.ok) throw new Error('Server error');
     return r.json();
   })
   .then(d => {
+    console.warn('[GameHTTP] Server response:', d);
     if(d && typeof d.balance === 'number'){
+      console.warn(`[GameHTTP] Updating local balance to: ${d.balance}`);
       balance = d.balance;
       updateUI();
     } else if(d && d.ok){
+      console.warn('[GameHTTP] Server confirmed (ok=true)');
       // Server confirmed, balance already sent in payload
       return;
     }
   })
   .catch(err => {
+    console.error('[GameHTTP] Error:', err);
     // Silently handle errors - game continues locally
   });
 }
