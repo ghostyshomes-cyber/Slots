@@ -282,32 +282,111 @@
 const tg = window.Telegram?.WebApp;
 if(tg){ tg.expand(); tg.setBackgroundColor('#0a0a0f'); tg.setHeaderColor('#0a0a0f'); }
 
-/* ── PARAMS ── */
-const params  = new URLSearchParams(location.search);
-const BOT_URL = params.get('bot_url') || '';
-const MIN_BET = parseFloat(params.get('min_bet') || '5');
-const MAX_BET = parseFloat(params.get('max_bet') || '500');
-const USER_ID = params.get('uid') || '';
-let balance   = parseFloat(params.get('balance') || '100');
-let initialBalance = balance;  // Запомнить стартовый баланс
+/* ── GET USER DATA FROM TELEGRAM'S BUILT-IN DATA (NO URL PARAMS NEEDED) ── */
+let USER_ID = '';
+let BOT_URL = '';
+let MIN_BET = 5;
+let MAX_BET = 500;
+let balance = 100;
+let initialBalance = balance;
+let GAME_SECRET = '';
 
-// DEBUG: детальное логирование параметров
-console.warn('═══════════════════════════════════════');
-console.warn('[GameInit] GAME INITIALIZATION');
-console.warn('═══════════════════════════════════════');
-console.warn('[GameInit] BOT_URL:', BOT_URL || '❌ EMPTY!');
-console.warn('[GameInit] USER_ID:', USER_ID || '❌ EMPTY!');
-console.warn('[GameInit] Initial balance:', balance);
-console.warn('[GameInit] MIN_BET:', MIN_BET, 'MAX_BET:', MAX_BET);
-
-// Если BOT_URL пуст, это критическая проблема
-if(!BOT_URL){
-  console.error('═══════════════════════════════════════');
-  console.error('❌ CRITICAL: BOT_URL is empty!');
-  console.error('The casino will NOT be able to sync balance with the bot.');
-  console.error('Check that games_webapp_url is set in admin panel.');
-  console.error('═══════════════════════════════════════');
+// Extract user ID from Telegram's initData (built-in, no tunnels needed)
+if(tg){
+  try {
+    const initData = new URLSearchParams(tg.initData);
+    const user = initData.get('user');
+    if(user){
+      const userData = JSON.parse(user);
+      USER_ID = userData.id.toString();
+      console.error('[TelegramData] ✅ USER_ID from Telegram:', USER_ID);
+    }
+  } catch(e) {
+    console.error('[TelegramData] ❌ Could not parse Telegram user data:', e);
+  }
+} else {
+  console.error('[TelegramData] ❌ Telegram WebApp SDK not available');
 }
+
+// Fallback: try URL parameters for testing
+if(!USER_ID) {
+  const params = new URLSearchParams(location.search);
+  USER_ID = params.get('uid') || '';
+  BOT_URL = params.get('bot_url') || '';
+  MIN_BET = parseFloat(params.get('min_bet') || '5');
+  MAX_BET = parseFloat(params.get('max_bet') || '500');
+  balance = parseFloat(params.get('balance') || '100');
+  GAME_SECRET = params.get('secret') || '';
+  initialBalance = balance;
+  if(USER_ID) console.error('[TelegramData] ℹ️ USER_ID from URL params:', USER_ID);
+}
+
+// Initialize logging
+console.error('═══════════════════════════════════════');
+console.error('[GameInit] 🎮 GAME INITIALIZATION START');
+console.error('═══════════════════════════════════════');
+console.error('[GameInit] USER_ID:', USER_ID || '❌ EMPTY - CRITICAL!');
+console.error('[GameInit] BOT_URL:', BOT_URL || '(will fetch from API)');
+console.error('[GameInit] Initial balance:', balance);
+console.error('[GameInit] GAME_SECRET:', GAME_SECRET ? '✅ SET' : '❌ EMPTY');
+
+// Load user data from bot API if USER_ID is available
+async function _loadUserDataFromBot(){
+  if(!USER_ID) {
+    console.error('❌ Cannot load data: USER_ID is empty');
+    return false;
+  }
+  
+  try {
+    console.error('[BotAPI] 🚀 INIT: Fetching user data for uid:', USER_ID);
+    
+    // Determine API base URL from current location
+    // If games.html is served from https://domain:7878/games,
+    // then API should be at https://domain:7878/api
+    const protocol = location.protocol;  // http: or https:
+    const host = location.host;           // domain:port or domain
+    const apiBase = `${protocol}//${host}/api/user/${USER_ID}`;
+    
+    console.error('[BotAPI] 🌐 API endpoint:', apiBase);
+    
+    // Try to fetch with various credential options
+    const endpoints = [
+      { url: apiBase, init: {} },
+      { url: apiBase, init: { credentials: 'omit' } },
+    ];
+    
+    for(const {url, init} of endpoints) {
+      try {
+        console.error('[BotAPI] 📡 Attempting to fetch:', url);
+        const resp = await fetch(url, init);
+        console.error('[BotAPI] 📨 Response status:', resp.status);
+        if(!resp.ok) {
+          console.error('[BotAPI] ❌ Response not ok:', resp.status);
+          continue;
+        }
+        
+        const data = await resp.json();
+        console.error('[BotAPI] 📦 User data received:', JSON.stringify(data));
+        
+        balance = parseFloat(data.balance || 100);
+        initialBalance = balance;
+        MIN_BET = parseFloat(data.min_bet || 5);
+        MAX_BET = parseFloat(data.max_bet || 500);
+        BOT_URL = data.game_api || '';
+        GAME_SECRET = data.game_secret || '';
+        
+        console.error('[BotAPI] ✅ SUCCESS! balance:', balance, 'BOT_URL:', BOT_URL ? 'SET' : 'EMPTY', 'SECRET:', GAME_SECRET ? 'SET' : 'EMPTY');
+        return true;
+      } catch(e) {
+        console.error('[BotAPI] 💥 Fetch error:', e.message);
+      }
+    }
+  } catch(e) {
+    console.error('[BotAPI] 💥 Critical error:', e);
+  }
+  return false;
+}
+
 let currentGame = 'slots';
 let doubleReached = false;  // Флаг: достигнут ли х2 баланса
 
@@ -1076,16 +1155,18 @@ function updateRocket(){
 }
 
 /* ── BOT BALANCE SYNC ── */
-const GAME_SECRET = params.get('secret') || '';
 console.warn('[GameInit] GAME_SECRET:', GAME_SECRET ? 'SET' : 'EMPTY');
+console.warn('[GameInit] BOT_URL:', BOT_URL ? 'SET' : 'EMPTY');
+console.warn('[GameInit] USER_ID:', USER_ID ? 'SET' : 'EMPTY');
 
 function _gamePost(payload){
   if(!BOT_URL){
-    console.error('[GameHTTP] ERROR: BOT_URL is empty!');
+    console.error('[GameHTTP] 🚨 CRITICAL: BOT_URL is empty!');
+    console.error('[GameHTTP] Payload would have been:', JSON.stringify(payload));
     return;
   }
   if(!USER_ID){
-    console.error('[GameHTTP] ERROR: USER_ID is empty!');
+    console.error('[GameHTTP] 🚨 CRITICAL: USER_ID is empty!');
     return;
   }
   
@@ -1096,7 +1177,15 @@ function _gamePost(payload){
     payload.casino_balance = balance + (payload.bet || 0);
   }
   
-  console.warn('[GameHTTP] Sending payload:', JSON.stringify(payload));
+  console.error('[GameHTTP] 🎮 GAME RESULT - Sending to bot:', {
+    action: payload.action,
+    uid: payload.uid,
+    bet: payload.bet,
+    win: payload.win,
+    new_balance: payload.new_balance,
+    has_secret: !!GAME_SECRET,
+    bot_url: BOT_URL
+  });
   
   fetch(BOT_URL, {
     method: 'POST',
@@ -1104,30 +1193,41 @@ function _gamePost(payload){
     body: JSON.stringify(payload)
   })
   .then(r => {
-    console.warn('[GameHTTP] Response status:', r.status);
-    if(!r.ok) throw new Error('Server error');
+    console.error('[GameHTTP] 📨 Server response status:', r.status);
+    if(!r.ok) {
+      console.error('[GameHTTP] ❌ Server error:', r.status);
+      throw new Error('Server error: ' + r.status);
+    }
     return r.json();
   })
   .then(d => {
-    console.warn('[GameHTTP] Server response:', d);
+    console.error('[GameHTTP] ✅ Server response:', JSON.stringify(d));
     if(d && typeof d.balance === 'number'){
-      console.warn(`[GameHTTP] Updating local balance to: ${d.balance}`);
+      console.error(`[GameHTTP] 💰 Updating local balance to: ${d.balance}`);
       balance = d.balance;
       updateUI();
     } else if(d && d.ok){
-      console.warn('[GameHTTP] Server confirmed (ok=true)');
-      // Server confirmed, balance already sent in payload
+      console.error('[GameHTTP] ✅ Server confirmed (ok=true)');
       return;
     }
   })
   .catch(err => {
-    console.error('[GameHTTP] Error:', err);
-    // Silently handle errors - game continues locally
+    console.error('[GameHTTP] 💥 Error:', err.message);
   });
 }
 
 /* ── INIT ── */
-function initGame(){
+async function initGame(){
+  // Load user data from bot API first
+  console.error('[GameInit] 🔧 Loading user data from bot...');
+  const loaded = await _loadUserDataFromBot();
+  
+  if(loaded){
+    console.error('[GameInit] ✅ User data loaded successfully');
+  } else {
+    console.error('[GameInit] ⚠️ Could not load from bot API, using default values');
+  }
+  
   buildPresets('slots');
   buildPresets('rocket');
   updateUI();
@@ -1135,7 +1235,19 @@ function initGame(){
   updateRocket();
   
   buildReels();
+  
+  console.error('═══════════════════════════════════════');
+  console.error('[GameInit] ✅ INITIALIZATION COMPLETE!');
+  console.error('[GameInit] Final state:');
+  console.error('[GameInit]   USER_ID:', USER_ID);
+  console.error('[GameInit]   BOT_URL:', BOT_URL || '❌ NOT SET');
+  console.error('[GameInit]   GAME_SECRET:', GAME_SECRET ? '✅ SET' : '❌ NOT SET');
+  console.error('[GameInit]   Current Balance:', balance);
+  console.error('═══════════════════════════════════════');
   resetRocketCanvas();
+  
+  // Log final state
+  console.log('[GameInit] ✅ Game initialized. USER_ID:', USER_ID, 'balance:', balance);
 }
 
 // Wait for DOM to be ready and fonts to load
