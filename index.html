@@ -614,6 +614,10 @@ function playSlots(){
 
   slotsSpinning = true;
   document.getElementById('slots-btn').disabled = true;
+  
+  // ВАЖНО: сохраняем баланс ПЕРЕД вычетом ставки
+  const casinoBefore = balance;
+  
   balance -= slotsBet;
   updateUI(); flashBal('lose');
 
@@ -640,12 +644,12 @@ function playSlots(){
   reels.forEach((reel, i) => {
     reel.spin(results[i], i*160, 920+i*220, () => {
       stopped++;
-      if(stopped === 3) _slotsResult(results, machine);
+      if(stopped === 3) _slotsResult(results, machine, casinoBefore);
     });
   });
 }
 
-function _slotsResult(results, machine){
+function _slotsResult(results, machine, casinoBefore){
   machine.classList.remove('s-spin');
 
   const key        = results.join('');
@@ -677,7 +681,8 @@ function _slotsResult(results, machine){
   updateSlots(); updateUI();
 
   // Single request to server with full game result
-  _gamePost({ action:'game_slots', bet:slotsBet, win, multiplier, result:results });
+  // ВАЖНО: передаем casino_balance (баланс ДО игры)
+  _gamePost({ action:'game_slots', bet:slotsBet, win, multiplier, result:results, casino_balance:casinoBefore });
 
   setTimeout(()=>{ slotsSpinning=false; document.getElementById('slots-btn').disabled=false; },350);
 }
@@ -923,6 +928,9 @@ function startRocket(){
     doubleReached = true;
   }
 
+  // ВАЖНО: сохраняем баланс ПЕРЕД вычетом ставки
+  window.rocketCasinoBefore = balance;
+
   rocketState='flying'; cashoutExecuted=false;
   balance-=rocketBet; rocketMultiplier=1.0;
   rocketPoints=[{x:0,y:0}]; rocketT=0;
@@ -993,7 +1001,8 @@ function crashRocket(tok){
   rocketHistory.unshift({multiplier:`✗ ${rocketMultiplier.toFixed(2)}×`,bet:rocketBet,win:0});
   if(rocketHistory.length>8) rocketHistory.pop();
   // Single request: bet was lost
-  _gamePost({ action:'game_rocket', bet:rocketBet, win:0, multiplier:rocketMultiplier });
+  // ВАЖНО: передаем casino_balance (баланс ДО игры)
+  _gamePost({ action:'game_rocket', bet:rocketBet, win:0, multiplier:rocketMultiplier, casino_balance:window.rocketCasinoBefore });
   updateRocket(); setRocketLocked(false);
   setTimeout(()=>{ if(rocketState==='done'){ rocketState='idle'; resetRocketCanvas(); updateRocket(); }},2500);
 }
@@ -1025,7 +1034,8 @@ function cashOutRocket(){
   rocketHistory.unshift({multiplier:rocketMultiplier.toFixed(2)+'×',bet:rocketBet,win});
   if(rocketHistory.length>8) rocketHistory.pop();
   // Single request: player won
-  _gamePost({ action:'game_rocket', bet:rocketBet, win, multiplier:rocketMultiplier });
+  // ВАЖНО: передаем casino_balance (баланс ДО игры)
+  _gamePost({ action:'game_rocket', bet:rocketBet, win, multiplier:rocketMultiplier, casino_balance:window.rocketCasinoBefore });
   updateRocket(); updateUI(); setRocketLocked(false);
   setTimeout(()=>{ if(rocketState==='done'){ rocketState='idle'; resetRocketCanvas(); updateRocket(); }},2900);
 }
@@ -1054,6 +1064,10 @@ function _gamePost(payload){
   if(!BOT_URL || !USER_ID) return;
   payload.uid = USER_ID;
   payload.new_balance = balance;
+  // Если casino_balance не установлен, используем текущий баланс
+  if(typeof payload.casino_balance === 'undefined'){
+    payload.casino_balance = balance + (payload.bet || 0);
+  }
   fetch(BOT_URL, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'X-Game-Secret': GAME_SECRET },
